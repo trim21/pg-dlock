@@ -1,0 +1,56 @@
+name: release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: '3.12'
+          enable-cache: true
+          activate-environment: true
+
+      - run: uv build
+
+      - run: uv publish --trusted-publishing always
+
+      - name: Get Previous Tag
+        id: tag
+        uses: trim21/changelog-previous-tag@master
+        with:
+          token: ${{ github.token }}
+          version-spec: pep440
+
+      - name: Update CHANGELOG
+        id: changelog
+        uses: requarks/changelog-action@v1
+        with:
+          token: ${{ github.token }}
+          fromTag: ${{ github.ref_name }}
+          toTag: ${{ env.previousTag }}
+          restrictToTypes: feat,fix,refactor,revert
+
+      - name: Upload Github Release
+        run: gh release create "${GITHUB_REF}" --notes "${CHANGELOG}" $EXTRA_OPTS
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANGELOG: "${{ steps.changelog.outputs.changes }}"
+          EXTRA_OPTS: "${{ env.preRelease == 'true' && '-p' || '' }}"

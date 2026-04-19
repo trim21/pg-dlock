@@ -1,0 +1,106 @@
+[build-system]
+requires = ["pdm-backend>=2.4,<3"]
+build-backend = "pdm.backend"
+
+[project]
+name = "pg-dlock"
+version = "0.1.0"
+description = "PostgreSQL-based distributed advisory lock (sync + async)."
+authors = [
+    { name = "Trim21", email = "trim21me@gmail.com" },
+]
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["postgres", "postgresql", "distributed-lock", "advisory-lock", "lock"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+
+requires-python = ">=3.12"
+
+dependencies = [
+    "psycopg[binary,pool]>=3.3",
+    "xxhash>=3.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/trim21/pg-dlock"
+Repository = "https://github.com/trim21/pg-dlock"
+Issues = "https://github.com/trim21/pg-dlock/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-github-actions-annotate-failures>=0.2",
+    "coverage>=7",
+    "pyright>=1.1.400",
+    "ruff>=0.6",
+]
+
+[tool.pdm.build]
+package-dir = "src"
+includes = ["src/pg_dlock"]
+
+[tool.pytest.ini_options]
+addopts = "-rav"
+asyncio_mode = "auto"
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "B",
+    "C",
+    "E",
+    "F",
+    "G",
+    "I",
+    "N",
+    "Q",
+    "W",
+    "BLE",
+    "EXE",
+    "ICN",
+    "INP",
+    "ISC",
+    "PIE",
+    "PL",
+    "PT",
+    "PYI",
+    "RET",
+    "RSE",
+    "RUF",
+    "SIM",
+    "TC",
+    "TID",
+    "TRY",
+    "YTT",
+    "ASYNC",
+]
+ignore = [
+    "E501",
+    "INP001",
+    "PLR2004",
+    "PLR0913",
+    "TRY003",
+    "TRY300",
+    "TRY301",
+    "RET504",
+    "SIM108",
+]
