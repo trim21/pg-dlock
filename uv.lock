@@ -124,7 +124,7 @@ wheels = [
 
 [[package]]
 name = "pg-dlock"
-version = "0.1.0"
+version = "0.0.0a0"
 source = { editable = "." }
 dependencies = [
     { name = "psycopg", extra = ["binary", "pool"] },
