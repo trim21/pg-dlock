@@ -2,11 +2,20 @@ import asyncio
 import os
 
 import pytest
+from psycopg.conninfo import make_conninfo
 
 from pg_dlock import AsyncLocker
 
 DSN = os.environ.get("PG_DLOCK_TEST_DSN")
 pytestmark = pytest.mark.skipif(not DSN, reason="PG_DLOCK_TEST_DSN not set")
+
+
+def _dsn_with_statement_timeout(timeout_ms: int) -> str:
+    assert DSN is not None
+    return make_conninfo(
+        DSN,
+        options=f"-c statement_timeout={timeout_ms}",
+    )
 
 
 @pytest.mark.asyncio
@@ -30,6 +39,30 @@ async def test_async_session_nonblocking_contention():
 
 
 @pytest.mark.asyncio
+async def test_async_session_none_timeout_overrides_connection_timeout():
+    async with AsyncLocker(_dsn_with_statement_timeout(50)) as locker:
+        key = "pg-dlock-async-no-timeout"
+        acquired = asyncio.Event()
+
+        async def worker() -> None:
+            lock = await locker.lock(key)
+            async with lock:
+                acquired.set()
+                await asyncio.sleep(0.2)
+
+        task = asyncio.create_task(worker())
+        await asyncio.wait_for(acquired.wait(), timeout=2)
+
+        other = await locker.lock(key)
+        t0 = asyncio.get_running_loop().time()
+        assert await other.try_acquire(timeout=None) is True
+        elapsed = asyncio.get_running_loop().time() - t0
+        assert elapsed >= 0.15
+        await other.release()
+        await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
 async def test_async_transaction_auto_release():
     assert DSN is not None
     async with AsyncLocker(DSN) as locker:
@@ -40,6 +73,30 @@ async def test_async_transaction_auto_release():
         other = await locker.lock(key, scope="transaction")
         assert await other.try_acquire(timeout=0) is True
         await other.release()
+
+
+@pytest.mark.asyncio
+async def test_async_transaction_none_timeout_overrides_connection_timeout():
+    async with AsyncLocker(_dsn_with_statement_timeout(50)) as locker:
+        key = "pg-dlock-async-xact-no-timeout"
+        acquired = asyncio.Event()
+
+        async def worker() -> None:
+            lock = await locker.lock(key, scope="transaction")
+            async with lock:
+                acquired.set()
+                await asyncio.sleep(0.2)
+
+        task = asyncio.create_task(worker())
+        await asyncio.wait_for(acquired.wait(), timeout=2)
+
+        other = await locker.lock(key, scope="transaction")
+        t0 = asyncio.get_running_loop().time()
+        assert await other.try_acquire(timeout=None) is True
+        elapsed = asyncio.get_running_loop().time() - t0
+        assert elapsed >= 0.15
+        await other.release()
+        await asyncio.wait_for(task, timeout=2)
 
 
 @pytest.mark.asyncio

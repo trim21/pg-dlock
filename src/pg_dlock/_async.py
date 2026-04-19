@@ -79,6 +79,12 @@ async def _set_statement_timeout(
     await cursor.fetchone()
 
 
+def _statement_timeout_value(timeout: float | None) -> str:
+    if timeout is None:
+        return "0"
+    return str(int(timeout * 1000))
+
+
 class AsyncLocker:
     def __init__(
         self,
@@ -181,13 +187,8 @@ class _AsyncSessionLock:
             self._held = acquired
             return acquired
 
-        prev_timeout: str | None = None
-        if timeout is not None:
-            async with conn.cursor() as cur:
-                await cur.execute("SHOW statement_timeout")
-                row = await cur.fetchone()
-                prev_timeout = str(cast("object", row[0])) if row else "0"
-                await _set_statement_timeout(cur, str(int(timeout * 1000)), local=False)
+        async with conn.cursor() as cur:
+            await _set_statement_timeout(cur, _statement_timeout_value(timeout), local=False)
         try:
             async with conn.cursor() as cur:
                 await cur.execute(
@@ -197,10 +198,6 @@ class _AsyncSessionLock:
                 await cur.fetchone()
         except QueryCanceled:
             return False
-        finally:
-            if prev_timeout is not None:
-                async with conn.cursor() as cur:
-                    await _set_statement_timeout(cur, prev_timeout, local=False)
 
         self._held = True
         return True
@@ -272,8 +269,8 @@ class _AsyncTransactionLock:
                 await conn.set_autocommit(False)
             async with conn.cursor() as cur:
                 await cur.execute("BEGIN")
-                if timeout is not None and timeout > 0:
-                    await _set_statement_timeout(cur, str(int(timeout * 1000)), local=True)
+                if timeout != 0:
+                    await _set_statement_timeout(cur, _statement_timeout_value(timeout), local=True)
 
                 if timeout == 0:
                     await cur.execute(

@@ -3,6 +3,7 @@ import threading
 import time
 
 import pytest
+from psycopg.conninfo import make_conninfo
 
 from pg_dlock import FailedToLockError, Locker
 
@@ -18,6 +19,14 @@ def locker():
         yield lk
     finally:
         lk.close()
+
+
+def _dsn_with_statement_timeout(timeout_ms: int) -> str:
+    assert DSN is not None
+    return make_conninfo(
+        DSN,
+        options=f"-c statement_timeout={timeout_ms}",
+    )
 
 
 def test_session_acquire_release(locker: Locker):
@@ -42,6 +51,31 @@ def test_session_try_acquire_timeout(locker: Locker):
         elapsed = time.monotonic() - t0
         assert got is False
         assert 0.25 <= elapsed < 2.0
+
+
+def test_session_try_acquire_none_overrides_connection_timeout():
+    key = "pg-dlock-test-session-no-timeout"
+    acquired = threading.Event()
+
+    with Locker(_dsn_with_statement_timeout(50)) as locker:
+
+        def worker():
+            with locker.lock(key):
+                acquired.set()
+                time.sleep(0.2)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        assert acquired.wait(timeout=2)
+
+        other = locker.lock(key)
+        t0 = time.monotonic()
+        assert other.try_acquire(timeout=None) is True
+        elapsed = time.monotonic() - t0
+        assert elapsed >= 0.15
+        other.release()
+        t.join(timeout=2)
+        assert not t.is_alive()
 
 
 def test_session_shared_locks_coexist(locker: Locker):
@@ -88,6 +122,31 @@ def test_transaction_scope_auto_release(locker: Locker):
     other = locker.lock(key, scope="transaction")
     assert other.try_acquire(timeout=0) is True
     other.release()
+
+
+def test_transaction_try_acquire_none_overrides_connection_timeout():
+    key = "pg-dlock-test-xact-no-timeout"
+    acquired = threading.Event()
+
+    with Locker(_dsn_with_statement_timeout(50)) as locker:
+
+        def worker():
+            with locker.lock(key, scope="transaction"):
+                acquired.set()
+                time.sleep(0.2)
+
+        t = threading.Thread(target=worker)
+        t.start()
+        assert acquired.wait(timeout=2)
+
+        other = locker.lock(key, scope="transaction")
+        t0 = time.monotonic()
+        assert other.try_acquire(timeout=None) is True
+        elapsed = time.monotonic() - t0
+        assert elapsed >= 0.15
+        other.release()
+        t.join(timeout=2)
+        assert not t.is_alive()
 
 
 def test_transaction_scope_rollback_on_exception(locker: Locker):

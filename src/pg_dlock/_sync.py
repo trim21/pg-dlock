@@ -79,6 +79,12 @@ def _set_statement_timeout(
     cursor.fetchone()
 
 
+def _statement_timeout_value(timeout: float | None) -> str:
+    if timeout is None:
+        return "0"
+    return str(int(timeout * 1000))
+
+
 class Locker:
     """Entry point for acquiring PostgreSQL advisory locks.
 
@@ -185,13 +191,8 @@ class _SessionLock:
             self._held = acquired
             return acquired
 
-        prev_timeout: str | None = None
-        if timeout is not None:
-            with conn.cursor() as cur:
-                cur.execute("SHOW statement_timeout")
-                row = cur.fetchone()
-                prev_timeout = str(cast("object", row[0])) if row else "0"
-                _set_statement_timeout(cur, str(int(timeout * 1000)), local=False)
+        with conn.cursor() as cur:
+            _set_statement_timeout(cur, _statement_timeout_value(timeout), local=False)
         try:
             with conn.cursor() as cur:
                 cur.execute(
@@ -201,10 +202,6 @@ class _SessionLock:
                 cur.fetchone()
         except QueryCanceled:
             return False
-        finally:
-            if prev_timeout is not None:
-                with conn.cursor() as cur:
-                    _set_statement_timeout(cur, prev_timeout, local=False)
 
         self._held = True
         return True
@@ -276,8 +273,8 @@ class _TransactionLock:
                 conn.autocommit = False
             with conn.cursor() as cur:
                 cur.execute("BEGIN")
-                if timeout is not None and timeout > 0:
-                    _set_statement_timeout(cur, str(int(timeout * 1000)), local=True)
+                if timeout != 0:
+                    _set_statement_timeout(cur, _statement_timeout_value(timeout), local=True)
 
                 if timeout == 0:
                     cur.execute(
