@@ -69,14 +69,15 @@ def test_session_context_blocks_until_released(locker: Locker):
 
     t = threading.Thread(target=worker)
     t.start()
-    acquired.wait(timeout=2)
+    assert acquired.wait(timeout=2)
 
     t0 = time.monotonic()
     with locker.lock(key):
         # should only acquire after the worker released
-        assert done.is_set()
         assert time.monotonic() - t0 >= 0.15
-    t.join()
+    assert done.wait(timeout=2)
+    t.join(timeout=2)
+    assert not t.is_alive()
 
 
 def test_transaction_scope_auto_release(locker: Locker):
