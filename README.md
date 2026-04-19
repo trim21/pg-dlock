@@ -24,10 +24,10 @@ async with AsyncLocker("postgres://...") as locker:
 
 - `Locker(conninfo, *, pool_min_size=0, pool_max_size=10)`
 - `locker.lock(key, *, scope="session"|"transaction", shared=False) -> Lock`
-- `lock.try_acquire(timeout=None) -> bool`
-  - `timeout=None`: block forever
-  - `timeout=0`: non-blocking
-  - `timeout>0` (seconds): wait up to N seconds (uses `statement_timeout`)
+- `lock.acquire(blocking=True, timeout=-1) -> bool`
+  - `blocking=True, timeout=-1`: block forever
+  - `blocking=False`: non-blocking
+  - `blocking=True, timeout>=0` (seconds): wait up to N seconds (uses `statement_timeout`)
 - `lock.release()`
 - Context manager support (`with lock:` / `async with lock:`).
 

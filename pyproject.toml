@@ -42,7 +42,6 @@ dev = [
     "pytest-asyncio>=0.24",
     "pytest-github-actions-annotate-failures>=0.2",
     "coverage>=7",
-    "pyright>=1.1.400",
     "ruff>=0.6",
 ]
 

@@ -34,26 +34,26 @@ def test_session_acquire_release(locker: Locker):
         pass
 
 
-def test_session_try_acquire_nonblocking_contention(locker: Locker):
+def test_session_acquire_nonblocking_contention(locker: Locker):
     key = "pg-dlock-test-session-contend"
     with locker.lock(key):
         # Another lock on a separate connection must fail non-blocking acquire.
         other = locker.lock(key)
-        assert other.try_acquire(timeout=0) is False
+        assert other.acquire(blocking=False) is False
 
 
-def test_session_try_acquire_timeout(locker: Locker):
+def test_session_acquire_timeout(locker: Locker):
     key = "pg-dlock-test-session-timeout"
     with locker.lock(key):
         other = locker.lock(key)
         t0 = time.monotonic()
-        got = other.try_acquire(timeout=0.3)
+        got = other.acquire(timeout=0.3)
         elapsed = time.monotonic() - t0
         assert got is False
         assert 0.25 <= elapsed < 2.0
 
 
-def test_session_try_acquire_none_overrides_connection_timeout():
+def test_session_acquire_none_overrides_connection_timeout():
     key = "pg-dlock-test-session-no-timeout"
     acquired = threading.Event()
 
@@ -70,7 +70,7 @@ def test_session_try_acquire_none_overrides_connection_timeout():
 
         other = locker.lock(key)
         t0 = time.monotonic()
-        assert other.try_acquire(timeout=None) is True
+        assert other.acquire() is True
         elapsed = time.monotonic() - t0
         assert elapsed >= 0.15
         other.release()
@@ -82,12 +82,22 @@ def test_session_shared_locks_coexist(locker: Locker):
     key = "pg-dlock-test-session-shared"
     a = locker.lock(key, shared=True)
     b = locker.lock(key, shared=True)
-    a.try_acquire(None)
+    a.acquire()
     try:
-        assert b.try_acquire(timeout=0) is True
+        assert b.acquire(blocking=False) is True
         b.release()
     finally:
         a.release()
+
+
+def test_session_lock_is_not_reentrant(locker: Locker):
+    lock = locker.lock("pg-dlock-test-session-not-reentrant")
+    lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="already held"):
+            lock.acquire()
+    finally:
+        lock.release()
 
 
 def test_session_context_blocks_until_released(locker: Locker):
@@ -120,11 +130,11 @@ def test_transaction_scope_auto_release(locker: Locker):
         pass
     # after txn commit, lock is free — should be immediately acquirable
     other = locker.lock(key, scope="transaction")
-    assert other.try_acquire(timeout=0) is True
+    assert other.acquire(blocking=False) is True
     other.release()
 
 
-def test_transaction_try_acquire_none_overrides_connection_timeout():
+def test_transaction_acquire_none_overrides_connection_timeout():
     key = "pg-dlock-test-xact-no-timeout"
     acquired = threading.Event()
 
@@ -141,7 +151,7 @@ def test_transaction_try_acquire_none_overrides_connection_timeout():
 
         other = locker.lock(key, scope="transaction")
         t0 = time.monotonic()
-        assert other.try_acquire(timeout=None) is True
+        assert other.acquire() is True
         elapsed = time.monotonic() - t0
         assert elapsed >= 0.15
         other.release()
@@ -155,7 +165,7 @@ def test_transaction_scope_rollback_on_exception(locker: Locker):
         raise RuntimeError("boom")
     # lock must be released even though the context exited via exception
     other = locker.lock(key, scope="transaction")
-    assert other.try_acquire(timeout=0) is True
+    assert other.acquire(blocking=False) is True
     other.release()
 
 
@@ -163,11 +173,30 @@ def test_transaction_scope_contention(locker: Locker):
     key = "pg-dlock-test-xact-contend"
     with locker.lock(key, scope="transaction"):
         other = locker.lock(key, scope="transaction")
-        assert other.try_acquire(timeout=0) is False
+        assert other.acquire(blocking=False) is False
+
+
+def test_transaction_lock_is_not_reentrant(locker: Locker):
+    lock = locker.lock("pg-dlock-test-xact-not-reentrant", scope="transaction")
+    lock.acquire()
+    try:
+        with pytest.raises(RuntimeError, match="already held"):
+            lock.acquire()
+    finally:
+        lock.release()
+
+
+def test_acquire_rejects_timeout_with_nonblocking(locker: Locker):
+    lock = locker.lock("pg-dlock-test-invalid-timeout")
+    with pytest.raises(ValueError, match="non-blocking"):
+        lock.acquire(blocking=False, timeout=0.1)
+
+
+def test_acquire_rejects_negative_timeout(locker: Locker):
+    lock = locker.lock("pg-dlock-test-negative-timeout")
+    with pytest.raises(ValueError, match="positive"):
+        lock.acquire(timeout=-2)
 
 
 def test_enter_raises_on_failed_acquire_with_zero_timeout():
-    # try_acquire(0) path via context manager is not exercised (ctx uses None),
-    # so we test that FailedToLockError is raised only when try_acquire reports False.
-    # This is a smoke test that the exception class is exported.
     assert FailedToLockError.__name__ == "FailedToLockError"

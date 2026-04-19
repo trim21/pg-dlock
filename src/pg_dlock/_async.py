@@ -25,8 +25,9 @@ class AsyncLock(Protocol):
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None: ...
-    async def try_acquire(self, timeout: float | None = None) -> bool: ...  # noqa: ASYNC109
+    async def acquire(self, blocking: bool = True, timeout: float = -1) -> bool: ...  # noqa: ASYNC109
     async def release(self) -> None: ...
+    def locked(self) -> bool: ...
 
 
 def _session_try_lock_query(shared: bool) -> LiteralString:
@@ -85,6 +86,24 @@ def _statement_timeout_value(timeout: float | None) -> str:
     return str(int(timeout * 1000))
 
 
+async def _configure_pool_connection(
+    conn: psycopg.AsyncConnection[TupleRow],
+) -> None:
+    await conn.set_autocommit(False)
+
+
+def _acquire_timeout(blocking: bool, timeout: float) -> float | None:
+    if not blocking:
+        if timeout != -1:
+            raise ValueError("can't specify a timeout for a non-blocking acquire")
+        return 0
+    if timeout == -1:
+        return None
+    if timeout < 0:
+        raise ValueError("timeout value must be positive")
+    return timeout
+
+
 class AsyncLocker:
     def __init__(
         self,
@@ -104,6 +123,7 @@ class AsyncLocker:
                 conninfo=self._conninfo,
                 min_size=self._pool_min_size,
                 max_size=self._pool_max_size,
+                configure=_configure_pool_connection,
                 open=False,
             )
             await self._pool.open()
@@ -172,33 +192,47 @@ class _AsyncSessionLock:
             self._conn = await psycopg.AsyncConnection.connect(self._conninfo, autocommit=True)
         return self._conn
 
-    async def try_acquire(self, timeout: float | None = None) -> bool:  # noqa: ASYNC109
-        if self._held:
-            return True
-        conn = await self._conn_or_open()
-
-        if timeout == 0:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    _session_try_lock_query(self._shared),
-                    (self._lock_id,),
-                )
-                acquired = bool(await _one(cur))
-            self._held = acquired
-            return acquired
-
+    async def _acquire_nonblocking(self, conn: psycopg.AsyncConnection[TupleRow]) -> bool:
         async with conn.cursor() as cur:
-            await _set_statement_timeout(cur, _statement_timeout_value(timeout), local=False)
-        try:
-            async with conn.cursor() as cur:
-                await cur.execute(
-                    _session_lock_query(self._shared),
-                    (self._lock_id,),
-                )
-                await cur.fetchone()
-        except QueryCanceled:
-            return False
+            await cur.execute(
+                _session_try_lock_query(self._shared),
+                (self._lock_id,),
+            )
+            return bool(await _one(cur))
 
+    async def _acquire_blocking(
+        self,
+        conn: psycopg.AsyncConnection[TupleRow],
+        wait_timeout: float | None,
+    ) -> bool:
+        async with conn.cursor() as cur:
+            await _set_statement_timeout(cur, _statement_timeout_value(wait_timeout), local=False)
+        async with conn.cursor() as cur:
+            await cur.execute(
+                _session_lock_query(self._shared),
+                (self._lock_id,),
+            )
+            await cur.fetchone()
+            return True
+
+    def locked(self) -> bool:
+        return self._held
+
+    async def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:  # noqa: ASYNC109
+        wait_timeout = _acquire_timeout(blocking, timeout)
+        if self._held:
+            raise RuntimeError(f"lock {self.key!r} is already held")
+        conn = await self._conn_or_open()
+        if wait_timeout == 0:
+            acquired = await self._acquire_nonblocking(conn)
+        else:
+            try:
+                acquired = await self._acquire_blocking(conn, wait_timeout)
+            except QueryCanceled:
+                return False
+
+        if not acquired:
+            return False
         self._held = True
         return True
 
@@ -225,7 +259,7 @@ class _AsyncSessionLock:
                 self._conn = None
 
     async def __aenter__(self) -> Self:
-        acquired = await self.try_acquire(None)
+        acquired = await self.acquire()
         if not acquired:
             await self._close_conn()
             raise FailedToLockError(f"failed to acquire lock {self.key!r}")
@@ -260,39 +294,51 @@ class _AsyncTransactionLock:
         self._conn: psycopg.AsyncConnection[TupleRow] | None = None
         self._held = False
 
-    async def try_acquire(self, timeout: float | None = None) -> bool:  # noqa: ASYNC109
+    async def _acquire_nonblocking(self, cur: psycopg.AsyncCursor[TupleRow]) -> bool:
+        await cur.execute(
+            _transaction_try_lock_query(self._shared),
+            (self._lock_id,),
+        )
+        return bool(await _one(cur))
+
+    async def _acquire_blocking(
+        self,
+        cur: psycopg.AsyncCursor[TupleRow],
+        wait_timeout: float | None,
+    ) -> bool:
+        await _set_statement_timeout(cur, _statement_timeout_value(wait_timeout), local=True)
+        await cur.execute(
+            _transaction_lock_query(self._shared),
+            (self._lock_id,),
+        )
+        await cur.fetchone()
+        return True
+
+    def locked(self) -> bool:
+        return self._held
+
+    async def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:  # noqa: ASYNC109
+        wait_timeout = _acquire_timeout(blocking, timeout)
         if self._held:
-            return True
+            raise RuntimeError(f"lock {self.key!r} is already held")
         conn = await self._pool.getconn()
         try:
-            if conn.autocommit:
-                await conn.set_autocommit(False)
             async with conn.cursor() as cur:
                 await cur.execute("BEGIN")
-                if timeout != 0:
-                    await _set_statement_timeout(cur, _statement_timeout_value(timeout), local=True)
-
-                if timeout == 0:
-                    await cur.execute(
-                        _transaction_try_lock_query(self._shared),
-                        (self._lock_id,),
-                    )
-                    acquired = bool(await _one(cur))
-                    if not acquired:
-                        await cur.execute("ROLLBACK")
-                        await self._pool.putconn(conn)
-                        return False
+                if wait_timeout == 0:
+                    acquired = await self._acquire_nonblocking(cur)
                 else:
                     try:
-                        await cur.execute(
-                            _transaction_lock_query(self._shared),
-                            (self._lock_id,),
-                        )
-                        await cur.fetchone()
+                        acquired = await self._acquire_blocking(cur, wait_timeout)
                     except QueryCanceled:
                         await cur.execute("ROLLBACK")
                         await self._pool.putconn(conn)
                         return False
+
+                if not acquired:
+                    await cur.execute("ROLLBACK")
+                    await self._pool.putconn(conn)
+                    return False
         except BaseException:
             try:
                 await conn.rollback()
@@ -316,7 +362,7 @@ class _AsyncTransactionLock:
             await self._pool.putconn(conn)
 
     async def __aenter__(self) -> Self:
-        acquired = await self.try_acquire(None)
+        acquired = await self.acquire()
         if not acquired:
             raise FailedToLockError(f"failed to acquire lock {self.key!r}")
         return self
