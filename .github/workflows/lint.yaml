@@ -28,7 +28,7 @@ jobs:
 
       - uses: jakebailey/pyright-action@v2
         with:
-          version: PATH
+          version: '1.1.400'
 
   pre-commit:
     runs-on: ubuntu-latest
