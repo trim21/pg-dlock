@@ -77,14 +77,10 @@ placeholders; they don't play well with pyright + psycopg's generic typing.
 
 ## Tooling
 
-From the package root (`packages/pg-dlock/` in the monorepo, or the repo root if
-you cloned `pg-dlock` standalone):
-
 ```sh
 uv sync --locked --group dev
-uv run ruff check src tests
-uv run pyright
-uv run pytest tests           # key tests only unless PG_DLOCK_TEST_DSN is set
+ruff check src tests
+pyright
 ```
 
 For integration tests, spin up Postgres and set:
@@ -114,24 +110,12 @@ GitHub Actions under `.github/workflows/`:
 - `lint.yaml` — `pyright` + pre-commit via `trim21/actions/prek`.
 - `test.yaml` — matrix of Python 3.12/3.13/3.14 × Postgres 15/16/17 using a
   service container; `PG_DLOCK_TEST_DSN` is set so integration tests run.
-- `release.yaml` — on tag `v*`: `uv build` + `uv publish` with
-  `UV_PUBLISH_TOKEN=secrets.PYPI_TOKEN`, then generate a GitHub release from
+- `release.yaml` — on tag `v*`: `uv build` + `uv publish`  then generate a GitHub release from
   conventional-commit history.
-
-## Release
-
-Use `taskfile.yaml`:
-
-```sh
-task patch   # or: task minor
-```
-
-This bumps the version in `pyproject.toml`, commits, and creates a `vX.Y.Z`
-tag. Pushing the tag triggers `release.yaml`.
 
 ## Don't
 
-- Don't add tuple-key variants, extra overloads, or clever key-compression
+- Don't add extra overloads, or clever key-compression
   schemes — the current encoding is intentional and stable.
 - Don't introduce new runtime dependencies lightly; this library aims to stay
   minimal.
