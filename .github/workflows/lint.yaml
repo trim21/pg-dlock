@@ -26,7 +26,7 @@ jobs:
 
       - run: uv sync --locked --group dev
 
-      - uses: jakebailey/pyright-action@v2
+      - uses: jakebailey/pyright-action@v3
         with:
           version: '1.1.411'
 
