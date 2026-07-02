@@ -36,7 +36,7 @@ jobs:
       PG_DLOCK_TEST_DSN: postgresql://postgres:postgres@localhost:5432/pg_dlock_test
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
